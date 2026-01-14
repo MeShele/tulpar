@@ -1,0 +1,19 @@
+# Tulpar Express Bot - Docker Compose
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: tulpar-bot
+    restart: always
+    env_file:
+      - docker/.env
+    volumes:
+      - ./docker/google-service-account.json:/app/credentials/google-service-account.json:ro
+    environment:
+      - GOOGLE_CREDENTIALS_PATH=/app/credentials/google-service-account.json
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

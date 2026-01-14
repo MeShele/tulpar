@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+
+# Environment
+.env
+docker/.env
+
+# Google credentials (keep out of git)
+*.json
+!package.json
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+.windsurf/
+*.swp
+
+# BMAD
+_bmad/
+_bmad-output/
+
+# Agent workflows (generated)
+.agent/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Excel temp files
+~$*.xlsx
+
+# Excel data files (client data - keep local)
+*.xlsx

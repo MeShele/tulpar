@@ -1,0 +1,23 @@
+# Tulpar Express Bot - Dependencies
+# Python 3.11+
+
+# Telegram Bot
+aiogram==3.13.1
+
+# Google Sheets
+gspread==6.1.4
+google-auth==2.36.0
+
+# Excel Parsing
+openpyxl==3.1.5
+
+# PostgreSQL (optional dual-write)
+asyncpg==0.30.0
+
+# Utilities
+python-dotenv==1.0.1
+tenacity==9.0.0
+
+# Development
+pytest==8.3.4
+pytest-asyncio==0.24.0
