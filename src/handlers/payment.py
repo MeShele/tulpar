@@ -388,8 +388,7 @@ async def handle_payment_webhook(data: dict, bot: Bot) -> dict:
         if not parsed:
             return {"status": "error", "message": "Invalid callback data"}
 
-        payment_id = parsed.get("payment_id")
-        status = parsed.get("status", "").upper()
+        payment_id = parsed.get("order_id")
 
         if not payment_id:
             return {"status": "error", "message": "Missing payment_id"}
