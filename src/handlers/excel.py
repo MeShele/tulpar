@@ -16,7 +16,8 @@ from src.filters import IsAdmin
 from src.services.sheets import sheets_service
 from src.services.database import db_service
 from src.services.excel_parser import parse_excel, ExcelParseResult
-from src.services.notifications import broadcast, send_parcel_notification
+from src.services.notifications import broadcast, send_parcel_notification, send_payment_notification
+from src.services.payment import payment_service, PaymentRequest
 from src.models import Client, Parcel, ParcelStatus
 from src.keyboards import get_admin_menu
 from src.config import config
@@ -222,27 +223,69 @@ async def process_bishkek_excel(
         else:
             not_found_codes.append(row.client_code)
 
-    # Send notifications with payment info (Story 3.3)
+    # Send notifications with payment info and QR codes (Story 3.3)
     success_count = 0
     failed_count = 0
+    qr_generated_count = 0
 
     for client, amount_som, tracking, weight in notifications_data:
-        message_text = (
-            f"✅ <b>Посылка прибыла в Бишкек!</b>\n\n"
-            f"Вес: {weight:.2f} кг\n"
-            f"💰 К оплате: <b>{amount_som:.0f} сом</b>\n\n"
-            f"Ваш код: {client.code}\n"
-            f"Заберите в пункте выдачи."
-        )
-        success = await send_parcel_notification(
+        # Skip clients without chat_id (imported without Telegram)
+        if not client.chat_id or client.chat_id == 0:
+            logger.info(f"Skipping {client.code} - no chat_id")
+            continue
+
+        qr_data = None
+        qr_image_url = None
+        payment_result = None
+
+        # Generate QR code payment if payment service is configured
+        if payment_service.is_configured() and amount_som > 0:
+            payment_request = PaymentRequest(
+                client_code=client.code,
+                amount_som=amount_som,
+                description=f"Доставка {client.code} ({weight:.2f}кг)",
+                tracking=tracking,
+                chat_id=client.chat_id,
+            )
+
+            payment_result = await payment_service.create_payment(payment_request)
+
+            if payment_result.success:
+                qr_data = payment_result.qr_data
+                qr_image_url = payment_result.qr_image_url
+                qr_generated_count += 1
+
+                # Save payment to database
+                if config.database_url:
+                    await db_service.create_payment(
+                        payment_id=payment_result.payment_id,
+                        client_code=client.code,
+                        chat_id=client.chat_id,
+                        amount_som=amount_som,
+                        description=f"Доставка ({weight:.2f}кг)",
+                        tracking=tracking,
+                        qr_data=qr_data,
+                    )
+                logger.info(f"QR payment created for {client.code}: {payment_result.payment_id}")
+            else:
+                logger.warning(f"Failed to create QR for {client.code}: {payment_result.error}")
+
+        # Send notification with or without QR
+        success, message_id = await send_payment_notification(
             bot=bot,
             client=client,
-            status_message="✅ Посылка прибыла в Бишкек!",
+            amount_som=amount_som,
             tracking=tracking,
-            amount=amount_som,
+            weight_kg=weight,
+            qr_data=qr_data,
+            qr_image_url=qr_image_url,
         )
+
         if success:
             success_count += 1
+            # Update payment record with message_id for later deletion
+            if payment_result and payment_result.success and message_id and config.database_url:
+                await db_service.update_payment_message_id(payment_result.payment_id, message_id)
         else:
             failed_count += 1
 
@@ -252,6 +295,9 @@ async def process_bishkek_excel(
         f"📊 Всего строк: {len(result.rows)}",
         f"✅ Уведомлено: {success_count}",
     ]
+
+    if qr_generated_count > 0:
+        report_lines.append(f"💳 QR для оплаты: {qr_generated_count}")
 
     if not_found_codes:
         report_lines.append(f"❌ Не найдено: {len(not_found_codes)}")

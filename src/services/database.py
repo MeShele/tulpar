@@ -121,6 +121,35 @@ class DatabaseService:
                 ON CONFLICT (key) DO NOTHING
             """)
 
+            # Payments table for QR payment tracking
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id SERIAL PRIMARY KEY,
+                    payment_id VARCHAR(100) UNIQUE NOT NULL,
+                    client_code VARCHAR(20) NOT NULL,
+                    chat_id BIGINT NOT NULL,
+                    amount_som DECIMAL(10,2) NOT NULL,
+                    description VARCHAR(255),
+                    tracking VARCHAR(100),
+                    status VARCHAR(20) DEFAULT 'PENDING',
+                    qr_data TEXT,
+                    message_id BIGINT,
+                    paid_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Index for payment lookups
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_payments_client_code ON payments(client_code)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_payments_chat_id ON payments(chat_id)
+            """)
+
             logger.info("Database tables created/verified")
 
     # ============== Settings ==============
@@ -352,6 +381,183 @@ class DatabaseService:
                 "parcels_count": parcels_count,
                 "status_counts": status_counts,
             }
+
+    # ============== Payment Operations ==============
+
+    async def create_payment(
+        self,
+        payment_id: str,
+        client_code: str,
+        chat_id: int,
+        amount_som: float,
+        description: str,
+        tracking: Optional[str] = None,
+        qr_data: Optional[str] = None,
+        message_id: Optional[int] = None,
+    ) -> bool:
+        """Create a new payment record"""
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO payments (payment_id, client_code, chat_id, amount_som, description, tracking, qr_data, message_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, payment_id, client_code, chat_id, amount_som, description, tracking, qr_data, message_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create payment: {e}")
+            return False
+
+    async def get_payment_by_id(self, payment_id: str) -> Optional[dict]:
+        """Get payment by payment_id"""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM payments WHERE payment_id = $1", payment_id
+            )
+            return dict(row) if row else None
+
+    async def get_pending_payment_by_chat(self, chat_id: int) -> Optional[dict]:
+        """Get pending payment for a chat"""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM payments
+                WHERE chat_id = $1 AND status = 'PENDING'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, chat_id)
+            return dict(row) if row else None
+
+    async def update_payment_status(
+        self,
+        payment_id: str,
+        status: str,
+        paid_at: Optional[datetime] = None,
+    ) -> bool:
+        """Update payment status"""
+        try:
+            async with self._pool.acquire() as conn:
+                if paid_at:
+                    await conn.execute("""
+                        UPDATE payments SET status = $2, paid_at = $3
+                        WHERE payment_id = $1
+                    """, payment_id, status, paid_at)
+                else:
+                    await conn.execute("""
+                        UPDATE payments SET status = $2
+                        WHERE payment_id = $1
+                    """, payment_id, status)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update payment status: {e}")
+            return False
+
+    async def get_payments_by_client(self, client_code: str, limit: int = 20) -> List[dict]:
+        """Get payments for a client"""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM payments
+                WHERE client_code = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, client_code.upper(), limit)
+            return [dict(row) for row in rows]
+
+    async def update_payment_message_id(self, payment_id: str, message_id: int) -> bool:
+        """Update payment with message_id for later QR message deletion"""
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE payments SET message_id = $1 WHERE payment_id = $2",
+                    message_id, payment_id
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update payment message_id: {e}")
+            return False
+
+    # ============== Client Table Operations ==============
+
+    async def get_clients_with_parcel_counts(
+        self,
+        offset: int = 0,
+        limit: int = 10,
+        search_query: Optional[str] = None,
+    ) -> List[dict]:
+        """
+        Get clients with their parcel counts and total amounts
+
+        Returns list of dicts with: code, full_name, phone, chat_id,
+        parcel_count, active_count, total_som, last_activity
+        """
+        async with self._pool.acquire() as conn:
+            if search_query:
+                # Search by code, name or phone
+                search_pattern = f"%{search_query}%"
+                rows = await conn.fetch("""
+                    SELECT
+                        c.code,
+                        c.full_name,
+                        c.phone,
+                        c.chat_id,
+                        c.reg_date,
+                        COUNT(p.id) as parcel_count,
+                        COUNT(CASE WHEN p.status != 'DELIVERED' THEN 1 END) as active_count,
+                        COALESCE(SUM(p.amount_som), 0) as total_som,
+                        MAX(COALESCE(p.date_bishkek, p.date_china, p.created_at)) as last_activity
+                    FROM clients c
+                    LEFT JOIN parcels p ON c.code = p.client_code
+                    WHERE c.code ILIKE $1 OR c.full_name ILIKE $1 OR c.phone ILIKE $1
+                    GROUP BY c.id, c.code, c.full_name, c.phone, c.chat_id, c.reg_date
+                    ORDER BY last_activity DESC NULLS LAST, c.reg_date DESC
+                    LIMIT $2 OFFSET $3
+                """, search_pattern, limit, offset)
+            else:
+                rows = await conn.fetch("""
+                    SELECT
+                        c.code,
+                        c.full_name,
+                        c.phone,
+                        c.chat_id,
+                        c.reg_date,
+                        COUNT(p.id) as parcel_count,
+                        COUNT(CASE WHEN p.status != 'DELIVERED' THEN 1 END) as active_count,
+                        COALESCE(SUM(p.amount_som), 0) as total_som,
+                        MAX(COALESCE(p.date_bishkek, p.date_china, p.created_at)) as last_activity
+                    FROM clients c
+                    LEFT JOIN parcels p ON c.code = p.client_code
+                    GROUP BY c.id, c.code, c.full_name, c.phone, c.chat_id, c.reg_date
+                    ORDER BY last_activity DESC NULLS LAST, c.reg_date DESC
+                    LIMIT $1 OFFSET $2
+                """, limit, offset)
+
+            return [dict(row) for row in rows]
+
+    async def get_clients_count(self, search_query: Optional[str] = None) -> int:
+        """Get total number of clients (for pagination)"""
+        async with self._pool.acquire() as conn:
+            if search_query:
+                search_pattern = f"%{search_query}%"
+                return await conn.fetchval("""
+                    SELECT COUNT(*) FROM clients
+                    WHERE code ILIKE $1 OR full_name ILIKE $1 OR phone ILIKE $1
+                """, search_pattern)
+            else:
+                return await conn.fetchval("SELECT COUNT(*) FROM clients")
+
+    async def get_client_parcels_detailed(self, client_code: str) -> List[dict]:
+        """Get detailed parcels for a client with payment status"""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    p.*,
+                    pay.status as payment_status,
+                    pay.paid_at
+                FROM parcels p
+                LEFT JOIN payments pay ON p.client_code = pay.client_code
+                    AND p.tracking = pay.tracking
+                WHERE p.client_code = $1
+                ORDER BY p.created_at DESC
+            """, client_code.upper())
+            return [dict(row) for row in rows]
 
 
 # Global service instance

@@ -13,10 +13,21 @@ from src.filters import IsAdmin
 from src.services.sheets import sheets_service
 from src.services.database import db_service
 from src.models import ParcelStatus
-from src.keyboards import get_admin_menu, get_search_type_keyboard, get_excel_type_keyboard, get_table_filter_keyboard
+from src.keyboards import (
+    get_admin_menu,
+    get_search_type_keyboard,
+    get_excel_type_keyboard,
+    get_table_filter_keyboard,
+    get_table_mode_keyboard,
+    get_clients_table_keyboard,
+    get_client_detail_keyboard,
+)
 from src.config import config
 
 admin_router = Router(name="admin")
+
+# Pagination constant
+CLIENTS_PER_PAGE = 8
 
 
 class AdminStates(StatesGroup):
@@ -136,13 +147,222 @@ async def cmd_setrate(message: Message):
 
 @admin_router.message(F.text == "📋 Таблица", IsAdmin())
 async def btn_table(message: Message):
-    """Show dynamic table with filter options"""
+    """Show clients table directly"""
+    if not config.database_url:
+        await message.answer(
+            "❌ База данных не настроена.\n"
+            "Таблица клиентов доступна только с PostgreSQL.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Show clients table directly
+    total_count = await db_service.get_clients_count()
+    total_pages = max(1, (total_count + CLIENTS_PER_PAGE - 1) // CLIENTS_PER_PAGE)
+
+    clients = await db_service.get_clients_with_parcel_counts(
+        offset=0,
+        limit=CLIENTS_PER_PAGE,
+    )
+
+    if not clients:
+        await message.answer(
+            "👥 <b>Клиенты</b>\n\nКлиентов пока нет.",
+            parse_mode="HTML",
+            reply_markup=get_table_mode_keyboard()
+        )
+        return
+
+    # Build table text
+    lines = [
+        "👥 <b>Таблица клиентов</b>",
+        f"Всего: {total_count} | Стр. 1/{total_pages}\n",
+        "🔴 = есть активные заказы",
+        "",
+    ]
+
+    for c in clients:
+        active = c.get("active_count", 0)
+        total = c.get("parcel_count", 0)
+        icon = "🔴" if active > 0 else "✅"
+        name = c.get("full_name", "")[:18]
+        lines.append(f"{icon} <b>{c['code']}</b> — {name} ({active}/{total})")
+
+    lines.append("\n<i>Нажмите на клиента для деталей</i>")
+
     await message.answer(
-        "📋 <b>Динамическая таблица посылок</b>\n\n"
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=get_clients_table_keyboard(
+            page=0,
+            total_pages=total_pages,
+            clients=clients,
+        )
+    )
+
+
+@admin_router.callback_query(F.data == "table_mode:clients", IsAdmin())
+async def callback_table_clients(callback: CallbackQuery):
+    """Switch to clients table view"""
+    await show_clients_table(callback, page=0)
+
+
+@admin_router.callback_query(F.data == "table_mode:parcels", IsAdmin())
+async def callback_table_parcels(callback: CallbackQuery):
+    """Switch to parcels table view"""
+    await callback.message.edit_text(
+        "📦 <b>Таблица посылок</b>\n\n"
         "Выберите фильтр:",
         parse_mode="HTML",
         reply_markup=get_table_filter_keyboard()
     )
+    await callback.answer()
+
+
+# ============== Clients Table View ==============
+
+async def show_clients_table(callback: CallbackQuery, page: int = 0):
+    """Display paginated clients table"""
+    if not config.database_url:
+        await callback.message.edit_text(
+            "❌ База данных не настроена.\n"
+            "Таблица клиентов доступна только с PostgreSQL.",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    # Get clients with stats
+    total_count = await db_service.get_clients_count()
+    total_pages = max(1, (total_count + CLIENTS_PER_PAGE - 1) // CLIENTS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+
+    clients = await db_service.get_clients_with_parcel_counts(
+        offset=page * CLIENTS_PER_PAGE,
+        limit=CLIENTS_PER_PAGE,
+    )
+
+    if not clients:
+        await callback.message.edit_text(
+            "👥 <b>Клиенты</b>\n\n"
+            "Клиентов пока нет.",
+            parse_mode="HTML",
+            reply_markup=get_table_mode_keyboard()
+        )
+        await callback.answer()
+        return
+
+    # Build table text
+    lines = [
+        "👥 <b>Таблица клиентов</b>",
+        f"Всего: {total_count} | Стр. {page + 1}/{total_pages}\n",
+        "🔴 = есть активные заказы",
+        "",
+    ]
+
+    for c in clients:
+        active = c.get("active_count", 0)
+        total = c.get("parcel_count", 0)
+        icon = "🔴" if active > 0 else "✅"
+        name = c.get("full_name", "")[:18]
+        lines.append(f"{icon} <b>{c['code']}</b> — {name} ({active}/{total})")
+
+    lines.append("\n<i>Нажмите на клиента для деталей</i>")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=get_clients_table_keyboard(
+            page=page,
+            total_pages=total_pages,
+            clients=clients,
+        )
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("clients_page:"), IsAdmin())
+async def callback_clients_page(callback: CallbackQuery):
+    """Handle clients table pagination"""
+    page = int(callback.data.split(":")[1])
+    await show_clients_table(callback, page=page)
+
+
+@admin_router.callback_query(F.data.startswith("client_view:"), IsAdmin())
+async def callback_client_view(callback: CallbackQuery):
+    """Show detailed client view with their parcels"""
+    client_code = callback.data.split(":")[1]
+
+    # Get client info
+    client = await sheets_service.get_client_by_code(client_code)
+    if not client:
+        await callback.answer("Клиент не найден", show_alert=True)
+        return
+
+    # Get parcels with payment status
+    if config.database_url:
+        parcels = await db_service.get_client_parcels_detailed(client_code)
+    else:
+        parcels_raw = await sheets_service.get_parcels_by_client_code(client_code)
+        parcels = [{"tracking": p.tracking, "status": p.status.value, "weight_kg": p.weight_kg,
+                    "amount_som": p.amount_som, "date_bishkek": p.date_bishkek} for p in parcels_raw]
+
+    # Build client info text
+    lines = [
+        f"👤 <b>{client.code}</b>",
+        f"",
+        f"📛 {client.full_name}",
+        f"📱 {client.phone}",
+        f"🆔 <code>{client.chat_id}</code>",
+        f"📅 Рег: {client.reg_date.strftime('%d.%m.%Y')}",
+        "",
+        f"📦 <b>Заказы ({len(parcels)}):</b>",
+    ]
+
+    # Status icons mapping
+    status_icons = {
+        "CHINA_WAREHOUSE": "🇨🇳",
+        "IN_TRANSIT": "✈️",
+        "BISHKEK_ARRIVED": "🏠",
+        "READY_PICKUP": "💰",
+        "DELIVERED": "✅",
+    }
+
+    for p in parcels[:10]:
+        status = p.get("status", "")
+        icon = status_icons.get(status, "📦")
+        tracking = p.get("tracking", "-")[:12]
+        weight = p.get("weight_kg", 0)
+        amount = p.get("amount_som", 0)
+        payment_status = p.get("payment_status", "")
+
+        # Payment indicator
+        pay_icon = ""
+        if payment_status == "PAID":
+            pay_icon = " 💳✓"
+        elif payment_status == "PENDING" and status == "BISHKEK_ARRIVED":
+            pay_icon = " 💳⏳"
+
+        amount_str = f"{amount:.0f}с" if amount > 0 else ""
+        weight_str = f"{weight:.1f}кг" if weight > 0 else ""
+
+        lines.append(f"  {icon} {tracking} {weight_str} {amount_str}{pay_icon}")
+
+    if len(parcels) > 10:
+        lines.append(f"  ... ещё {len(parcels) - 10}")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=get_client_detail_keyboard(client_code, parcels)
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "noop", IsAdmin())
+async def callback_noop(callback: CallbackQuery):
+    """No-op callback for pagination display"""
+    await callback.answer()
 
 
 @admin_router.callback_query(F.data.startswith("table:"), IsAdmin())
@@ -261,9 +481,9 @@ async def callback_search_type(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.message(AdminStates.waiting_search_query, IsAdmin())
+@admin_router.message(AdminStates.waiting_search_query, ~F.text.startswith("/"), IsAdmin())
 async def process_search_query(message: Message, state: FSMContext):
-    """Process search query"""
+    """Process search query (ignore commands)"""
     query = message.text.strip()
     data = await state.get_data()
     search_type = data.get("search_type", "code")
@@ -362,30 +582,56 @@ async def callback_excel_type(callback: CallbackQuery, state: FSMContext):
 @admin_router.callback_query(F.data.startswith("deliver:"), IsAdmin())
 async def callback_deliver(callback: CallbackQuery):
     """Handle deliver button press"""
-    tracking = callback.data.split(":", 1)[1]
+    parts = callback.data.split(":", 1)
+    if len(parts) != 2 or not parts[1].strip():
+        await callback.answer("❌ Некорректный запрос", show_alert=True)
+        return
+    tracking = parts[1].strip()[:100]  # Limit length for safety
 
-    parcel = await sheets_service.get_parcel_by_tracking(tracking)
+    # Try database first, then Google Sheets
+    parcel = None
+    use_db = False
+
+    if config.database_url:
+        parcel = await db_service.get_parcel_by_tracking(tracking)
+        if parcel:
+            use_db = True
+
+    if not parcel:
+        parcel = await sheets_service.get_parcel_by_tracking(tracking)
 
     if not parcel:
         await callback.answer(f"Посылка не найдена: {tracking}", show_alert=True)
         return
 
-    if parcel.status == ParcelStatus.DELIVERED:
+    parcel_status = parcel.status if hasattr(parcel, 'status') else ParcelStatus(parcel.get('status', 'UNKNOWN'))
+    parcel_client_code = parcel.client_code if hasattr(parcel, 'client_code') else parcel.get('client_code', '')
+
+    if parcel_status == ParcelStatus.DELIVERED:
         await callback.answer("Уже выдана", show_alert=True)
         return
 
-    success = await sheets_service.update_parcel_status(
-        client_code=parcel.client_code,
-        tracking=tracking,
-        new_status=ParcelStatus.DELIVERED,
-        date_delivered=datetime.now(),
-    )
+    # Update in appropriate service
+    if use_db:
+        success = await db_service.update_parcel_status(
+            client_code=parcel_client_code,
+            tracking=tracking,
+            new_status=ParcelStatus.DELIVERED,
+            date_delivered=datetime.now(),
+        )
+    else:
+        success = await sheets_service.update_parcel_status(
+            client_code=parcel_client_code,
+            tracking=tracking,
+            new_status=ParcelStatus.DELIVERED,
+            date_delivered=datetime.now(),
+        )
 
     if success:
         await callback.answer(f"✅ {tracking} выдана!")
 
         # Get client to notify
-        client = await sheets_service.get_client_by_code(parcel.client_code)
+        client = await sheets_service.get_client_by_code(parcel_client_code)
 
         # Notify client about delivery (FR9)
         if client:
@@ -403,7 +649,7 @@ async def callback_deliver(callback: CallbackQuery):
         # Update message to show delivered status
         await callback.message.reply(
             f"✅ Посылка <b>{tracking}</b> отмечена как выданная\n"
-            f"Клиент: {parcel.client_code}" + (" (уведомлён)" if client else ""),
+            f"Клиент: {parcel_client_code}" + (" (уведомлён)" if client else ""),
             parse_mode="HTML"
         )
         # Remove buttons from original message

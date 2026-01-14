@@ -85,10 +85,16 @@ class Parcel:
             except ValueError:
                 return None
 
+        # Safe status parsing - fallback to CHINA_WAREHOUSE if invalid
+        try:
+            status = ParcelStatus(row.get("status", ParcelStatus.CHINA_WAREHOUSE.value))
+        except ValueError:
+            status = ParcelStatus.CHINA_WAREHOUSE
+
         return cls(
             client_code=row.get("client_code", ""),
             tracking=row.get("tracking", ""),
-            status=ParcelStatus(row.get("status", ParcelStatus.CHINA_WAREHOUSE.value)),
+            status=status,
             weight_kg=float(row.get("weight_kg", 0)),
             amount_usd=float(row.get("amount_usd", 0)),
             amount_som=float(row.get("amount_som", 0)),
