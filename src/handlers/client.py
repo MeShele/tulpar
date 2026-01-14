@@ -13,7 +13,7 @@ from aiogram.types import Message, ReplyKeyboardRemove
 from src.services.sheets import sheets_service
 from src.services.database import db_service
 from src.models import Client
-from src.keyboards import get_client_menu, get_registration_cancel, get_admin_menu
+from src.keyboards import get_client_menu, get_registration_cancel, get_admin_menu, get_payment_keyboard
 from src.config import config
 
 
@@ -219,7 +219,7 @@ async def btn_my_code(message: Message):
 
 @client_router.message(F.text == "📦 Мои посылки")
 async def btn_my_parcels(message: Message):
-    """Show user's parcels status"""
+    """Show user's parcels status with payment option"""
     chat_id = message.from_user.id
     client = await get_client_by_chat_id(chat_id)
 
@@ -240,15 +240,30 @@ async def btn_my_parcels(message: Message):
         )
         return
 
-    # Build status message
+    # Build status message and calculate total unpaid
     lines = [f"📦 <b>Ваши посылки ({len(parcels)}):</b>\n"]
+    total_unpaid = 0.0
 
     for p in parcels:
         status_icon = "✅" if p.status.value == "DELIVERED" else "📦"
-        amount_text = f" — <b>{p.amount_som:.0f} сом</b>" if p.amount_som > 0 else ""
+        amount_text = ""
+        if p.amount_som and p.amount_som > 0:
+            amount_text = f" — <b>{p.amount_som:.0f} сом</b>"
+            # Count unpaid (not delivered)
+            if p.status.value != "DELIVERED":
+                total_unpaid += p.amount_som
         lines.append(f"{status_icon} {p.tracking}: {p.status.display_name}{amount_text}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    # Add total and payment button if there's unpaid amount
+    if total_unpaid > 0:
+        lines.append(f"\n💰 <b>К оплате: {total_unpaid:.0f} сом</b>")
+        await message.answer(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=get_payment_keyboard(client.code, total_unpaid)
+        )
+    else:
+        await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 # ============== Button: Забыл код (FR22-25) ==============

@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update, ErrorEvent
 
 from src.config import config
-from src.handlers import client_router, admin_router, excel_router
+from src.handlers import client_router, admin_router, excel_router, payment_router
 from src.services.database import db_service
 
 # Configure logging
@@ -100,6 +100,7 @@ async def main():
     # Register routers
     dp.include_router(admin_router)  # Admin router first for priority
     dp.include_router(excel_router)  # Excel handler for file uploads
+    dp.include_router(payment_router)  # Payment handlers
     dp.include_router(client_router)
 
     # Log startup info

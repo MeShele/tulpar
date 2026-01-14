@@ -93,3 +93,120 @@ def get_parcel_actions(tracking: str) -> InlineKeyboardMarkup:
     )
 
 
+def get_payment_keyboard(client_code: str, amount_som: float) -> InlineKeyboardMarkup:
+    """Payment button for client parcels"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"💳 Оплатить {amount_som:.0f} сом",
+                callback_data=f"pay:{client_code}:{amount_som:.0f}"
+            )],
+        ]
+    )
+
+
+def get_payment_status_keyboard(invoice_id: str) -> InlineKeyboardMarkup:
+    """Check payment status button"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔄 Проверить оплату",
+                callback_data=f"check_pay:{invoice_id}"
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отменить",
+                callback_data=f"cancel_pay:{invoice_id}"
+            )],
+        ]
+    )
+
+
+def get_table_mode_keyboard() -> InlineKeyboardMarkup:
+    """Choose between clients view and parcels view"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👥 По клиентам", callback_data="table_mode:clients"),
+                InlineKeyboardButton(text="📦 По посылкам", callback_data="table_mode:parcels"),
+            ],
+        ]
+    )
+
+
+def get_clients_table_keyboard(
+    page: int = 0,
+    total_pages: int = 1,
+    clients: list = None,
+) -> InlineKeyboardMarkup:
+    """
+    Keyboard for clients table with pagination and client buttons
+
+    Args:
+        page: Current page (0-indexed)
+        total_pages: Total number of pages
+        clients: List of client dicts with 'code' field
+    """
+    buttons = []
+
+    # Add client buttons (max 8 per page)
+    if clients:
+        for client in clients[:8]:
+            code = client.get("code", "")
+            active = client.get("active_count", 0)
+            icon = "🔴" if active > 0 else "✅"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{icon} {code} — {client.get('full_name', '')[:20]}",
+                    callback_data=f"client_view:{code}"
+                )
+            ])
+
+    # Pagination row
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"clients_page:{page - 1}"))
+    nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"clients_page:{page + 1}"))
+    buttons.append(nav_buttons)
+
+    # Actions row
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Обновить", callback_data=f"clients_page:{page}"),
+        InlineKeyboardButton(text="📦 К посылкам", callback_data="table_mode:parcels"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_client_detail_keyboard(client_code: str, parcels: list = None) -> InlineKeyboardMarkup:
+    """
+    Keyboard for client detail view with parcel actions
+
+    Args:
+        client_code: Client code
+        parcels: List of parcel dicts
+    """
+    buttons = []
+
+    # Add parcel action buttons (deliver non-delivered)
+    if parcels:
+        for p in parcels[:5]:
+            if p.get("status") != "DELIVERED":
+                tracking = p.get("tracking", "")[:15]
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=f"✅ Выдать {tracking}",
+                        callback_data=f"deliver:{p.get('tracking', '')}"
+                    )
+                ])
+
+    # Navigation buttons
+    buttons.append([
+        InlineKeyboardButton(text="◀️ К списку", callback_data="clients_page:0"),
+        InlineKeyboardButton(text="🔄 Обновить", callback_data=f"client_view:{client_code}"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+

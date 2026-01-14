@@ -38,6 +38,14 @@ class Config:
     default_usd_to_som: float
     usd_per_kg: float
 
+    # Payment API (O-Dengi / dengi.kg)
+    dengi_api_url: Optional[str]
+    dengi_sid: Optional[str]
+    dengi_password: Optional[str]
+    dengi_merchant_name: str
+    dengi_api_version: int
+    dengi_test_mode: bool
+
     @classmethod
     def from_env(cls) -> "Config":
         """Create config from environment variables"""
@@ -54,7 +62,14 @@ class Config:
             ),
             database_url=os.getenv("DATABASE_URL"),
             default_usd_to_som=float(os.getenv("DEFAULT_USD_TO_SOM", "89.5")),
-            usd_per_kg=float(os.getenv("USD_PER_KG", "3.5")),
+            usd_per_kg=float(os.getenv("USD_PER_KG", "1.2")),
+            # Payment API (O-Dengi)
+            dengi_api_url=os.getenv("DENGI_API_URL", "https://mw-api-test.dengi.kg/api"),
+            dengi_sid=os.getenv("DENGI_SID"),
+            dengi_password=os.getenv("DENGI_PASSWORD"),
+            dengi_merchant_name=os.getenv("DENGI_MERCHANT_NAME", "Tulpar Express"),
+            dengi_api_version=int(os.getenv("DENGI_API_VERSION", "1005")),
+            dengi_test_mode=os.getenv("DENGI_TEST_MODE", "true").lower() == "true",
         )
 
     def validate(self) -> None:

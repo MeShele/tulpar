@@ -8,8 +8,10 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
+from io import BytesIO
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramAPIError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -164,3 +166,138 @@ async def send_parcel_notification(
     except Exception as e:
         logger.error(f"Failed to send parcel notification to {client.code}: {e}")
         return False
+
+
+async def send_payment_notification(
+    bot: Bot,
+    client: Client,
+    amount_som: float,
+    tracking: Optional[str],
+    weight_kg: float,
+    qr_data: Optional[str] = None,
+    qr_image_url: Optional[str] = None,
+) -> Tuple[bool, Optional[int]]:
+    """
+    Send Bishkek arrival notification with QR code for payment
+
+    Args:
+        bot: aiogram Bot instance
+        client: Client to notify
+        amount_som: Payment amount in som
+        tracking: Tracking number
+        weight_kg: Parcel weight
+        qr_data: QR code data string
+        qr_image_url: URL to QR code image
+
+    Returns:
+        Tuple of (success, message_id)
+    """
+    lines = [
+        "✅ <b>Посылка прибыла в Бишкек!</b>",
+        "",
+        f"📦 Вес: {weight_kg:.2f} кг",
+        f"💰 К оплате: <b>{amount_som:.0f} сом</b>",
+        "",
+        f"Ваш код: {client.code}",
+    ]
+
+    if tracking:
+        lines.insert(4, f"📋 Трекинг: <code>{tracking}</code>")
+
+    if qr_data or qr_image_url:
+        lines.append("")
+        lines.append("⬇️ <b>Отсканируйте QR для оплаты:</b>")
+
+    message = "\n".join(lines)
+
+    try:
+        # If we have a QR image URL, try to send it as a photo
+        if qr_image_url:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(qr_image_url) as resp:
+                    if resp.status == 200:
+                        qr_bytes = await resp.read()
+                        photo = BufferedInputFile(qr_bytes, filename="qr_payment.png")
+                        sent = await bot.send_photo(
+                            chat_id=client.chat_id,
+                            photo=photo,
+                            caption=message,
+                            parse_mode="HTML",
+                        )
+                        return True, sent.message_id
+
+        # If we have QR data but no image, generate QR locally
+        if qr_data:
+            try:
+                import qrcode
+                qr = qrcode.QRCode(version=1, box_size=10, border=4)
+                qr.add_data(qr_data)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+
+                photo = BufferedInputFile(buffer.read(), filename="qr_payment.png")
+                sent = await bot.send_photo(
+                    chat_id=client.chat_id,
+                    photo=photo,
+                    caption=message,
+                    parse_mode="HTML",
+                )
+                return True, sent.message_id
+            except ImportError:
+                logger.warning("qrcode library not installed, sending text only")
+
+        # Fallback to text-only message
+        sent = await bot.send_message(
+            chat_id=client.chat_id,
+            text=message,
+            parse_mode="HTML",
+        )
+        return True, sent.message_id
+
+    except Exception as e:
+        logger.error(f"Failed to send payment notification to {client.code}: {e}")
+        return False, None
+
+
+async def send_admin_payment_notification(
+    bot: Bot,
+    admin_chat_ids: List[int],
+    client_code: str,
+    client_name: str,
+    amount_som: float,
+    payment_id: str,
+) -> None:
+    """
+    Notify admins about successful payment
+
+    Args:
+        bot: aiogram Bot instance
+        admin_chat_ids: List of admin chat IDs
+        client_code: Client code
+        client_name: Client full name
+        amount_som: Payment amount
+        payment_id: Payment ID
+    """
+    message = (
+        "💰 <b>Получена оплата!</b>\n\n"
+        f"Клиент: {client_name}\n"
+        f"Код: {client_code}\n"
+        f"Сумма: <b>{amount_som:.0f} сом</b>\n\n"
+        f"ID: <code>{payment_id}</code>\n\n"
+        "⚠️ Проверьте поступление средств!"
+    )
+
+    for admin_id in admin_chat_ids:
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=message,
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify admin {admin_id}: {e}")
