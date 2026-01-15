@@ -146,15 +146,14 @@ async def handle_check_payment(callback: CallbackQuery, bot: Bot):
 
         if result.status == PaymentStatus.PAID:
             # Payment successful! Process it (update DB + notify admin)
-            if result.order_id:
-                await process_payment_success(bot, result.order_id)
-            else:
-                # Fallback: just show success message
-                await callback.message.answer(
-                    "✅ <b>Оплата прошла успешно!</b>\n\n"
-                    "Спасибо! Можете забрать посылку в пункте выдачи.",
-                    parse_mode="HTML"
-                )
+            # Use invoice_id (what we stored in DB), not order_id
+            await process_payment_success(bot, invoice_id)
+            # Show success message
+            await callback.message.answer(
+                "✅ <b>Оплата прошла успешно!</b>\n\n"
+                "Спасибо! Можете забрать посылку в пункте выдачи.",
+                parse_mode="HTML"
+            )
             # Try to delete the QR message
             try:
                 await callback.message.delete()

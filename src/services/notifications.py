@@ -176,6 +176,7 @@ async def send_payment_notification(
     weight_kg: float,
     qr_data: Optional[str] = None,
     qr_image_url: Optional[str] = None,
+    invoice_id: Optional[str] = None,
 ) -> Tuple[bool, Optional[int]]:
     """
     Send Bishkek arrival notification with QR code for payment
@@ -188,10 +189,13 @@ async def send_payment_notification(
         weight_kg: Parcel weight
         qr_data: QR code data string
         qr_image_url: URL to QR code image
+        invoice_id: O-Dengi invoice ID for status check buttons
 
     Returns:
         Tuple of (success, message_id)
     """
+    from src.keyboards import get_payment_status_keyboard
+    keyboard = get_payment_status_keyboard(invoice_id) if invoice_id else None
     lines = [
         "✅ <b>Посылка прибыла в Бишкек!</b>",
         "",
@@ -211,24 +215,42 @@ async def send_payment_notification(
     message = "\n".join(lines)
 
     try:
-        # If we have a QR image URL, try to send it as a photo
-        if qr_image_url:
-            import aiohttp
+        import aiohttp
+
+        # Helper to fetch and send QR image from URL
+        async def try_send_qr_from_url(url: str) -> tuple:
+            if not url or "/#" in url:  # Skip broken URLs with /#
+                return False, None
             async with aiohttp.ClientSession() as session:
-                async with session.get(qr_image_url) as resp:
+                async with session.get(url) as resp:
                     if resp.status == 200:
                         qr_bytes = await resp.read()
-                        photo = BufferedInputFile(qr_bytes, filename="qr_payment.png")
-                        sent = await bot.send_photo(
-                            chat_id=client.chat_id,
-                            photo=photo,
-                            caption=message,
-                            parse_mode="HTML",
-                        )
-                        return True, sent.message_id
+                        if len(qr_bytes) > 100:  # Ensure not empty
+                            photo = BufferedInputFile(qr_bytes, filename="qr_payment.png")
+                            sent = await bot.send_photo(
+                                chat_id=client.chat_id,
+                                photo=photo,
+                                caption=message,
+                                parse_mode="HTML",
+                                reply_markup=keyboard,
+                            )
+                            return True, sent.message_id
+            return False, None
 
-        # If we have QR data but no image, generate QR locally
-        if qr_data:
+        # Try qr_data first if it's a URL (O-Dengi returns image URL in qr field)
+        if qr_data and qr_data.startswith("http"):
+            success, msg_id = await try_send_qr_from_url(qr_data)
+            if success:
+                return True, msg_id
+
+        # Try qr_image_url as fallback
+        if qr_image_url:
+            success, msg_id = await try_send_qr_from_url(qr_image_url)
+            if success:
+                return True, msg_id
+
+        # Generate QR locally from qr_data if it's not a URL
+        if qr_data and not qr_data.startswith("http"):
             try:
                 import qrcode
                 qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -246,6 +268,7 @@ async def send_payment_notification(
                     photo=photo,
                     caption=message,
                     parse_mode="HTML",
+                    reply_markup=keyboard,
                 )
                 return True, sent.message_id
             except ImportError:
@@ -256,6 +279,7 @@ async def send_payment_notification(
             chat_id=client.chat_id,
             text=message,
             parse_mode="HTML",
+            reply_markup=keyboard,
         )
         return True, sent.message_id
 

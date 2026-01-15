@@ -241,10 +241,10 @@ async def process_bishkek_excel(
         # Generate QR code payment if payment service is configured
         if payment_service.is_configured() and amount_som > 0:
             payment_request = PaymentRequest(
+                order_id="",  # Will be auto-generated
                 client_code=client.code,
                 amount_som=amount_som,
-                description=f"Доставка {client.code} ({weight:.2f}кг)",
-                tracking=tracking,
+                description=f"Доставка {client.code} ({weight:.2f}кг)" + (f" [{tracking}]" if tracking else ""),
                 chat_id=client.chat_id,
             )
 
@@ -258,7 +258,7 @@ async def process_bishkek_excel(
                 # Save payment to database
                 if config.database_url:
                     await db_service.create_payment(
-                        payment_id=payment_result.payment_id,
+                        payment_id=payment_result.invoice_id or payment_result.order_id,
                         client_code=client.code,
                         chat_id=client.chat_id,
                         amount_som=amount_som,
@@ -266,11 +266,12 @@ async def process_bishkek_excel(
                         tracking=tracking,
                         qr_data=qr_data,
                     )
-                logger.info(f"QR payment created for {client.code}: {payment_result.payment_id}")
+                logger.info(f"QR payment created for {client.code}: {payment_result.invoice_id}")
             else:
                 logger.warning(f"Failed to create QR for {client.code}: {payment_result.error}")
 
         # Send notification with or without QR
+        invoice_id = payment_result.invoice_id if payment_result and payment_result.success else None
         success, message_id = await send_payment_notification(
             bot=bot,
             client=client,
@@ -279,13 +280,14 @@ async def process_bishkek_excel(
             weight_kg=weight,
             qr_data=qr_data,
             qr_image_url=qr_image_url,
+            invoice_id=invoice_id,
         )
 
         if success:
             success_count += 1
             # Update payment record with message_id for later deletion
             if payment_result and payment_result.success and message_id and config.database_url:
-                await db_service.update_payment_message_id(payment_result.payment_id, message_id)
+                await db_service.update_payment_message_id(payment_result.invoice_id or payment_result.order_id, message_id)
         else:
             failed_count += 1
 
