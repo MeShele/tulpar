@@ -5,6 +5,7 @@ CRUD operations for clients, parcels, codes
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from functools import partial
 from typing import Optional, List, Dict, Any
@@ -31,10 +32,18 @@ class SheetsService:
     def _get_client(self) -> gspread.Client:
         """Get or create gspread client (lazy initialization)"""
         if self._client is None:
-            credentials = Credentials.from_service_account_file(
-                config.google_credentials_path,
-                scopes=self.SCOPES,
-            )
+            # Support both JSON string (for cloud) and file path (for local)
+            if config.google_credentials_json:
+                creds_info = json.loads(config.google_credentials_json)
+                credentials = Credentials.from_service_account_info(
+                    creds_info,
+                    scopes=self.SCOPES,
+                )
+            else:
+                credentials = Credentials.from_service_account_file(
+                    config.google_credentials_path,
+                    scopes=self.SCOPES,
+                )
             self._client = gspread.authorize(credentials)
         return self._client
 

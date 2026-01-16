@@ -10,12 +10,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 
-# Copy credentials (in production, use secrets/volume mount)
-COPY docker/google-service-account.json ./credentials/
-
 # Environment
 ENV PYTHONUNBUFFERED=1
-ENV GOOGLE_CREDENTIALS_PATH=/app/credentials/google-service-account.json
+
+# For Railway/cloud: use GOOGLE_CREDENTIALS_JSON env var
+# For local: mount credentials file and set GOOGLE_CREDENTIALS_PATH
 
 # Run bot
 CMD ["python", "-m", "src.main"]

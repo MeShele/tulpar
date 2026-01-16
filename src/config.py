@@ -29,7 +29,8 @@ class Config:
 
     # Google Sheets
     google_sheets_id: str
-    google_credentials_path: str
+    google_credentials_path: Optional[str]
+    google_credentials_json: Optional[str]  # JSON string for Railway/cloud deploy
 
     # PostgreSQL (optional)
     database_url: Optional[str]
@@ -52,14 +53,21 @@ class Config:
         admin_ids_str = os.getenv("ADMIN_CHAT_ID", "")
         admin_chat_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
 
+        # Google credentials: prefer JSON env var (for cloud), fallback to file path
+        google_creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        google_creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH")
+        if not google_creds_json and not google_creds_path:
+            # Default to local file if nothing specified
+            default_path = Path(__file__).parent.parent / "docker" / "google-service-account.json"
+            if default_path.exists():
+                google_creds_path = str(default_path)
+
         return cls(
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             admin_chat_ids=admin_chat_ids,
             google_sheets_id=os.getenv("GOOGLE_SHEETS_ID", ""),
-            google_credentials_path=os.getenv(
-                "GOOGLE_CREDENTIALS_PATH",
-                str(Path(__file__).parent.parent / "docker" / "google-service-account.json")
-            ),
+            google_credentials_path=google_creds_path,
+            google_credentials_json=google_creds_json,
             database_url=os.getenv("DATABASE_URL"),
             default_usd_to_som=float(os.getenv("DEFAULT_USD_TO_SOM", "89.5")),
             usd_per_kg=float(os.getenv("USD_PER_KG", "1.2")),
@@ -78,8 +86,10 @@ class Config:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         if not self.google_sheets_id:
             raise ValueError("GOOGLE_SHEETS_ID is required")
-        if not Path(self.google_credentials_path).exists():
-            raise ValueError(f"Google credentials not found: {self.google_credentials_path}")
+        # Need either JSON credentials or file path
+        if not self.google_credentials_json:
+            if not self.google_credentials_path or not Path(self.google_credentials_path).exists():
+                raise ValueError("Google credentials required: set GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH")
 
 
 # Global config instance
