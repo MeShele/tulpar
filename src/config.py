@@ -87,9 +87,17 @@ class Config:
         if not self.google_sheets_id:
             raise ValueError("GOOGLE_SHEETS_ID is required")
         # Need either JSON credentials or file path
-        if not self.google_credentials_json:
-            if not self.google_credentials_path or not Path(self.google_credentials_path).exists():
-                raise ValueError("Google credentials required: set GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH")
+        if self.google_credentials_json:
+            # JSON credentials provided - no file needed
+            pass
+        elif self.google_credentials_path:
+            # Check if path exists (and is not JSON string mistakenly put in PATH)
+            if self.google_credentials_path.startswith("{"):
+                raise ValueError("JSON detected in GOOGLE_CREDENTIALS_PATH. Use GOOGLE_CREDENTIALS_JSON instead.")
+            if not Path(self.google_credentials_path).exists():
+                raise ValueError(f"Google credentials file not found: {self.google_credentials_path}")
+        else:
+            raise ValueError("Google credentials required: set GOOGLE_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_PATH")
 
 
 # Global config instance
