@@ -235,7 +235,7 @@ def parse_weight(value) -> Optional[float]:
         return None
 
 
-def normalize_code(value: str) -> str:
+def normalize_code(value) -> str:
     """
     Normalize client code preserving original format.
 
@@ -249,7 +249,9 @@ def normalize_code(value: str) -> str:
         "N-7" -> "N-7"
         "5001" -> "TE-5001" (default to TE- if no prefix)
     """
-    value = value.strip().upper()
+    if value is None:
+        return ""
+    value = str(value).strip().upper()
 
     # Normalize Russian ТЕ to Latin TE
     value = value.replace("ТЕ-", "TE-").replace("ТЕ", "TE-")
