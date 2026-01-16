@@ -23,11 +23,13 @@ class ExcelParcelRow:
 
     @property
     def is_valid(self) -> bool:
-        """Check if row has required data (supports TE-XXXX and М-XXXX codes)"""
+        """Check if row has required data (supports TE-, М-, S-, KG-, N- codes)"""
         if not self.client_code:
             return False
-        code = self.client_code.upper()
-        return code.startswith("TE-") or code.startswith("М-") or code.startswith("M-")
+        code = self.client_code.upper().strip()
+        # Support multiple code formats: TE-XXXX, М-XXXX, S-XXX, KG-XXX, N-X
+        valid_prefixes = ("TE-", "М-", "M-", "S-", "KG-", "N-")
+        return any(code.startswith(p) for p in valid_prefixes)
 
 
 @dataclass
@@ -62,7 +64,7 @@ def detect_file_type(filename: str, sheet_data: List[dict]) -> str:
     # Check filename for hints
     if "китай" in filename_lower or "china" in filename_lower or "склад" in filename_lower:
         return "china"
-    if "бишкек" in filename_lower or "bishkek" in filename_lower or "прибыло" in filename_lower:
+    if "бишкек" in filename_lower or "bishkek" in filename_lower or "прибыло" in filename_lower or "оприходов" in filename_lower:
         return "bishkek"
 
     # Check if data has weight column (bishkek has weight, china doesn't)
@@ -116,7 +118,7 @@ def parse_excel(
 
         # Find column indices
         code_col = find_column(headers, ["код", "code", "клиент", "client"])
-        tracking_col = find_column(headers, ["трекинг", "tracking", "номер", "track"])
+        tracking_col = find_column(headers, ["трекинг", "tracking", "номер", "track", "штрих"])
         weight_col = find_column(headers, ["вес", "weight", "kg", "кг"])
 
         if code_col is None:
@@ -191,7 +193,7 @@ def find_header_row(all_rows: List[tuple], max_scan: int = 10) -> int:
     Returns:
         Row index (0-based) where headers are found
     """
-    header_keywords = ["код", "code", "клиент", "трекинг", "tracking", "вес", "weight", "кг", "kg"]
+    header_keywords = ["код", "code", "клиент", "трекинг", "tracking", "вес", "weight", "кг", "kg", "штрих"]
 
     for row_idx, row in enumerate(all_rows[:max_scan]):
         if row is None:
@@ -235,23 +237,30 @@ def parse_weight(value) -> Optional[float]:
 
 def normalize_code(value: str) -> str:
     """
-    Normalize client code to TE-XXXX format (AC 2.3.2)
+    Normalize client code preserving original format.
+
+    Supports: TE-XXXX, S-XXX, KG-XXX, N-X, М-XXXX
 
     Examples:
         "TE-5001" -> "TE-5001"
-        "5001" -> "TE-5001"
-        "te5001" -> "TE-5001"
+        "te-5001" -> "TE-5001"
+        "S-601" -> "S-601"
+        "KG-127" -> "KG-127"
+        "N-7" -> "N-7"
+        "5001" -> "TE-5001" (default to TE- if no prefix)
     """
     value = value.strip().upper()
 
-    # Remove common prefixes if present
-    value = value.replace("ТЕ-", "TE-").replace("ТЕ", "TE")
+    # Normalize Russian ТЕ to Latin TE
+    value = value.replace("ТЕ-", "TE-").replace("ТЕ", "TE-")
 
-    # If already in correct format
-    if value.startswith("TE-"):
-        return value
+    # Known prefixes - preserve them
+    known_prefixes = ("TE-", "S-", "KG-", "N-", "М-", "M-")
+    for prefix in known_prefixes:
+        if value.startswith(prefix):
+            return value
 
-    # Extract digits and format
+    # If no known prefix but has digits, default to TE-
     digits = "".join(filter(str.isdigit, value))
     if digits:
         return f"TE-{int(digits):04d}"

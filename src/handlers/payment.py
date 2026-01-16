@@ -44,7 +44,11 @@ async def handle_pay_button(callback: CallbackQuery, bot: Bot):
             return
 
         _, client_code, amount_str = parts
-        amount_som = float(amount_str)
+        try:
+            amount_som = float(amount_str)
+        except ValueError:
+            await callback.message.answer("❌ Ошибка: некорректная сумма")
+            return
 
         # Generate unique order ID
         order_id = f"TLP-{client_code}-{int(datetime.now().timestamp())}"
@@ -311,14 +315,7 @@ async def list_pending_payments(message: Message):
         await message.answer("❌ База данных не настроена")
         return
 
-    async with db_service._pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT payment_id, client_code, amount_som, created_at
-            FROM payments
-            WHERE status = 'PENDING'
-            ORDER BY created_at DESC
-            LIMIT 20
-        """)
+    rows = await db_service.get_pending_payments(limit=20)
 
     if not rows:
         await message.answer("✅ Нет ожидающих платежей")

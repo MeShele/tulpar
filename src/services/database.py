@@ -474,6 +474,18 @@ class DatabaseService:
             logger.error(f"Failed to update payment message_id: {e}")
             return False
 
+    async def get_pending_payments(self, limit: int = 20) -> List[dict]:
+        """Get all pending payments for admin review"""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT payment_id, client_code, amount_som, created_at
+                FROM payments
+                WHERE status = 'PENDING'
+                ORDER BY created_at DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+
     # ============== Client Table Operations ==============
 
     async def get_clients_with_parcel_counts(
