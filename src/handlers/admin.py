@@ -490,11 +490,19 @@ async def process_search_query(message: Message, state: FSMContext):
 
     await state.clear()
 
-    # Perform search
-    if search_type == "code" or query.upper().startswith("TE-"):
-        client = await sheets_service.get_client_by_code(query.upper())
+    # Perform search - try PostgreSQL first, fallback to Sheets
+    client = None
+    if search_type == "code" or query.upper().startswith("TE-") or query.upper().startswith("S-") or query.upper().startswith("KG-"):
+        code = query.upper().strip()
+        if config.database_url:
+            client = await db_service.get_client_by_code(code)
+        if not client:
+            client = await sheets_service.get_client_by_code(code)
     else:
-        client = await sheets_service.get_client_by_phone(query)
+        if config.database_url:
+            client = await db_service.get_client_by_phone(query)
+        if not client:
+            client = await sheets_service.get_client_by_phone(query)
 
     if not client:
         await message.answer(
@@ -503,8 +511,12 @@ async def process_search_query(message: Message, state: FSMContext):
         )
         return
 
-    # Get client's parcels
-    parcels = await sheets_service.get_parcels_by_client_code(client.code)
+    # Get client's parcels - try PostgreSQL first, fallback to Sheets
+    parcels = []
+    if config.database_url:
+        parcels = await db_service.get_parcels_by_client_code(client.code)
+    if not parcels:
+        parcels = await sheets_service.get_parcels_by_client_code(client.code)
 
     # Build parcel list and buttons
     parcel_lines = []

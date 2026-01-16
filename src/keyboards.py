@@ -17,7 +17,6 @@ def get_client_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📋 Мой код"), KeyboardButton(text="📦 Мои посылки")],
-            [KeyboardButton(text="🔑 Забыл код")],
         ],
         resize_keyboard=True,
     )
@@ -38,8 +37,7 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🔍 Поиск клиента")],
-            [KeyboardButton(text="📋 Таблица"), KeyboardButton(text="💱 Курс")],
-            [KeyboardButton(text="📁 Загрузить Excel")],
+            [KeyboardButton(text="💱 Курс"), KeyboardButton(text="📁 Загрузить Excel")],
         ],
         resize_keyboard=True,
     )

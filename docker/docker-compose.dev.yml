@@ -1,0 +1,23 @@
+version: '3.8'
+
+# Development override - run with:
+# docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  n8n:
+    environment:
+      - WEBHOOK_URL=http://localhost:5678
+      - N8N_HOST=localhost
+      - N8N_PROTOCOL=http
+      - NODE_ENV=development
+    ports:
+      - "5678:5678"
+
+  # Disable nginx and certbot in dev mode
+  nginx:
+    profiles:
+      - production
+
+  certbot:
+    profiles:
+      - production

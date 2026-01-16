@@ -94,6 +94,10 @@ def parse_excel(
     """
     errors = []
     rows = []
+    filename_lower = filename.lower()
+
+    # Pre-detect file type from filename
+    is_bishkek_file = "оприходов" in filename_lower or "бишкек" in filename_lower or "bishkek" in filename_lower
 
     try:
         # Load workbook
@@ -106,41 +110,51 @@ def parse_excel(
         # Get all rows
         all_rows = list(ws.iter_rows(values_only=True))
 
-        if len(all_rows) < 2:
-            return ExcelParseResult(rows=[], file_type="unknown", errors=["File is empty or has no data rows"])
+        if len(all_rows) < 1:
+            return ExcelParseResult(rows=[], file_type="unknown", errors=["File is empty"])
 
         # Find actual header row (may not be row 0)
         header_row_idx = find_header_row(all_rows)
-        logger.info(f"Found headers at row {header_row_idx + 1}")
+        has_headers = header_row_idx >= 0 and is_header_row(all_rows[header_row_idx] if header_row_idx < len(all_rows) else None)
 
-        # Get headers from the correct row
-        headers = [str(h).lower().strip() if h else "" for h in all_rows[header_row_idx]]
+        # Determine column indices based on file structure
+        if has_headers:
+            logger.info(f"Found headers at row {header_row_idx + 1}")
+            headers = [str(h).lower().strip() if h else "" for h in all_rows[header_row_idx]]
+            code_col = find_column(headers, ["код", "code", "клиент", "client", "货号"])
+            tracking_col = find_column(headers, ["трекинг", "tracking", "номер", "track", "штрих", "快递"])
+            weight_col = find_column(headers, ["вес", "weight", "kg", "кг", "重量"])
+            data_start_row = header_row_idx + 1
+        else:
+            # No headers - use positional columns (for Оприходование files)
+            logger.info(f"No headers found, using positional columns for {filename}")
+            code_col = 0      # Column A = client code
+            tracking_col = 1  # Column B = tracking
+            weight_col = 2    # Column C = weight
+            data_start_row = 0
 
-        # Find column indices
-        code_col = find_column(headers, ["код", "code", "клиент", "client"])
-        tracking_col = find_column(headers, ["трекинг", "tracking", "номер", "track", "штрих"])
-        weight_col = find_column(headers, ["вес", "weight", "kg", "кг"])
-
-        if code_col is None:
-            errors.append("Колонка с кодом клиента не найдена")
-            # Try to use first column as code
-            code_col = 0
-
-        # Parse data rows (starting AFTER header row)
-        data_start_row = header_row_idx + 1
+        # Parse data rows
         for row_num, row in enumerate(all_rows[data_start_row:], start=data_start_row + 1):
+            if not row or all(cell is None for cell in row):
+                continue
+
             try:
                 # Extract code
                 code_value = row[code_col] if code_col < len(row) else None
                 if not code_value:
                     continue
 
-                code = normalize_code(str(code_value))
+                code = normalize_code(code_value)
+                if not code:
+                    continue
 
                 # Extract tracking
                 tracking = None
-                if tracking_col is not None and tracking_col < len(row):
-                    tracking = str(row[tracking_col]) if row[tracking_col] else None
+                if tracking_col is not None and tracking_col < len(row) and row[tracking_col]:
+                    tracking = str(row[tracking_col]).strip()
+                    # Skip if tracking looks like a code (for header-less files)
+                    if tracking and not tracking[0].isdigit() and not tracking.startswith("JT") and not tracking.startswith("YT"):
+                        tracking = None
 
                 # Extract weight (handles Russian comma separator)
                 weight = None
@@ -152,6 +166,19 @@ def parse_excel(
                     tracking=tracking,
                     weight_kg=weight,
                 ))
+
+                # For Оприходование files, also check columns I-K for second batch
+                if is_bishkek_file and not has_headers and len(row) > 10:
+                    code2 = normalize_code(row[8]) if len(row) > 8 and row[8] else None
+                    tracking2 = str(row[9]).strip() if len(row) > 9 and row[9] else None
+                    weight2 = parse_weight(row[10]) if len(row) > 10 else None
+
+                    if code2:
+                        rows.append(ExcelParcelRow(
+                            client_code=code2,
+                            tracking=tracking2,
+                            weight_kg=weight2,
+                        ))
 
             except Exception as e:
                 errors.append(f"Ошибка в строке {row_num}: {e}")
@@ -174,6 +201,16 @@ def parse_excel(
         file_type=file_type,
         errors=errors,
     )
+
+
+def is_header_row(row) -> bool:
+    """Check if row looks like a header row (contains keywords)"""
+    if not row:
+        return False
+    header_keywords = ["код", "code", "клиент", "трекинг", "tracking", "вес", "weight", "кг", "kg", "штрих", "货号", "快递", "重量"]
+    row_text = " ".join(str(cell).lower() for cell in row if cell)
+    matches = sum(1 for kw in header_keywords if kw in row_text)
+    return matches >= 2
 
 
 def find_column(headers: List[str], keywords: List[str]) -> Optional[int]:

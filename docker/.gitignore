@@ -1,0 +1,11 @@
+# Environment files with secrets
+.env
+google-service-account.json
+
+# SSL certificates
+certbot/conf/*
+certbot/www/*
+
+# Keep directory structure
+!certbot/conf/.gitkeep
+!certbot/www/.gitkeep
