@@ -29,11 +29,11 @@ CURRENCY_COLOR = (50, 50, 50)  # Тёмно-серый для "сом"
 WATERMARK_COLOR = (255, 255, 255, 160)  # Белый полупрозрачный
 
 # Font sizes - увеличенные для яркости
-OLD_PRICE_FONT_SIZE = 42
-NEW_PRICE_FONT_SIZE = 72
-DISCOUNT_FONT_SIZE = 48
-WATERMARK_FONT_SIZE = 24
-CURRENCY_FONT_SIZE = 36
+OLD_PRICE_FONT_SIZE = 56
+NEW_PRICE_FONT_SIZE = 96
+DISCOUNT_FONT_SIZE = 56
+WATERMARK_FONT_SIZE = 28
+CURRENCY_FONT_SIZE = 48
 
 # Badge dimensions - больше для заметности
 BADGE_PADDING = 20
@@ -55,9 +55,9 @@ SOURCE_BADGE_PADDING = 12
 SOURCE_BADGE_RADIUS = 10
 
 # Price tag dimensions
-PRICE_TAG_HEIGHT = 140
+PRICE_TAG_HEIGHT = 180
 PRICE_TAG_MARGIN = 30
-PRICE_TAG_RADIUS = 20
+PRICE_TAG_RADIUS = 24
 
 # System fonts that support Cyrillic (tried in order)
 CYRILLIC_FONTS = [
