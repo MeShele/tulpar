@@ -21,8 +21,17 @@ from src.keyboards import (
     get_table_mode_keyboard,
     get_clients_table_keyboard,
     get_client_detail_keyboard,
+    get_autopost_menu,
 )
 from src.config import config
+
+# Check if autopost is available
+try:
+    from src.autopost.config import settings as autopost_settings
+    AUTOPOST_AVAILABLE = True
+except ImportError:
+    AUTOPOST_AVAILABLE = False
+    autopost_settings = None
 
 admin_router = Router(name="admin")
 
@@ -776,9 +785,252 @@ async def cmd_delivered(message: Message):
         await message.answer(f"❌ Ошибка при обновлении: {tracking}")
 
 
+# ============== Autopost Controls ==============
+
+@admin_router.message(F.text == "📢 Канал", IsAdmin())
+async def btn_autopost(message: Message):
+    """Show autopost control menu"""
+    if not AUTOPOST_AVAILABLE:
+        await message.answer(
+            "❌ Модуль автопостинга не установлен.",
+            parse_mode="HTML"
+        )
+        return
+
+    status = "✅ Включён" if autopost_settings.enabled else "⚪ Выключен"
+    channel = autopost_settings.telegram_channel_id or "не указан"
+    time = autopost_settings.posting_time
+
+    await message.answer(
+        f"📢 <b>Автопостинг в канал</b>\n\n"
+        f"Статус: {status}\n"
+        f"Канал: {channel}\n"
+        f"Время: {time}\n\n"
+        f"Выберите действие:",
+        parse_mode="HTML",
+        reply_markup=get_autopost_menu()
+    )
+
+
+@admin_router.callback_query(F.data == "ap:run", IsAdmin())
+async def callback_autopost_run(callback: CallbackQuery):
+    """Manually run the autopost pipeline"""
+    if not AUTOPOST_AVAILABLE or not autopost_settings.is_configured():
+        await callback.answer(
+            "Автопостинг не настроен. Проверьте переменные AUTOPOST_*",
+            show_alert=True
+        )
+        return
+
+    await callback.answer("⏳ Запускаю...")
+
+    if callback.message:
+        await callback.message.edit_text(
+            "🚀 <b>Запускаю публикацию...</b>\n\n"
+            "Это может занять несколько минут.\n"
+            "Вы получите уведомление о результате.",
+            parse_mode="HTML"
+        )
+
+    try:
+        # Import and run pipeline
+        from src.autopost.db.session import get_session_maker, get_engine, init_db
+        from src.autopost.db.models import ProductDB, PostDB, CurrencyRateDB, SettingsDB  # noqa
+        from src.autopost.pipeline.daily_pipeline import DailyPipeline
+        from src.autopost.services.pinduoduo import PinduoduoService
+        from src.autopost.services.currency import CurrencyService
+        from src.autopost.services.openai_service import OpenAIService
+        from src.autopost.services.image_service import ImageService
+        from src.autopost.services.telegram_service import TelegramService
+        from src.autopost.services.notification_service import NotificationService
+        from src.autopost.core.product_filter import ProductFilter
+        from src.autopost.db.repositories import CurrencyRepository
+        import httpx
+
+        # Ensure tables exist
+        await init_db()
+
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            async with get_session_maker()() as session:
+                currency_repo = CurrencyRepository(session)
+
+                pinduoduo = PinduoduoService(client=http_client)
+                currency = CurrencyService(client=http_client, repository=currency_repo)
+                text_service = OpenAIService(client=http_client)
+                image = ImageService(client=http_client)
+
+                telegram = TelegramService(
+                    bot_token=autopost_settings.telegram_bot_token,
+                    channel_id=autopost_settings.telegram_channel_id,
+                    owner_ids=autopost_settings.owner_ids_list,
+                )
+
+                notification = NotificationService(telegram_service=telegram)
+
+                product_filter = ProductFilter(
+                    min_discount=autopost_settings.min_discount,
+                    min_rating=autopost_settings.min_rating,
+                    top_limit=autopost_settings.top_products_limit,
+                )
+
+                pipeline = DailyPipeline(
+                    pinduoduo_service=pinduoduo,
+                    currency_service=currency,
+                    taobao_service=None,
+                    text_service=text_service,
+                    image_service=image,
+                    telegram_service=telegram,
+                    instagram_service=None,
+                    notification_service=notification,
+                    session=session,
+                    product_filter=product_filter,
+                )
+
+                result = await pipeline.run()
+
+                if result.success:
+                    if callback.message:
+                        await callback.message.answer(
+                            f"✅ <b>Публикация завершена!</b>\n\n"
+                            f"Товаров: {result.products_count}\n"
+                            f"Telegram ID: {result.telegram_message_id}\n"
+                            f"Время: {result.total_duration_ms}ms",
+                            parse_mode="HTML",
+                            reply_markup=get_autopost_menu()
+                        )
+                else:
+                    if callback.message:
+                        await callback.message.answer(
+                            f"❌ <b>Ошибка публикации</b>\n\n"
+                            f"Этап: {result.failed_stage}\n"
+                            f"Ошибка: <code>{str(result.error)[:200]}</code>",
+                            parse_mode="HTML",
+                            reply_markup=get_autopost_menu()
+                        )
+
+    except Exception as e:
+        if callback.message:
+            await callback.message.answer(
+                f"❌ <b>Ошибка:</b>\n<code>{str(e)[:300]}</code>",
+                parse_mode="HTML",
+                reply_markup=get_autopost_menu()
+            )
+
+
+@admin_router.callback_query(F.data == "ap:posts", IsAdmin())
+async def callback_autopost_posts(callback: CallbackQuery):
+    """Show list of published posts"""
+    if not AUTOPOST_AVAILABLE:
+        await callback.answer("Модуль автопостинга недоступен", show_alert=True)
+        return
+
+    try:
+        from src.autopost.db.session import get_session_maker
+        from src.autopost.db.repositories.post_repository import PostRepository
+
+        async with get_session_maker()() as session:
+            repo = PostRepository(session)
+            posts, total = await repo.get_posts(page=1, page_size=10)
+
+            if not posts:
+                await callback.message.edit_text(
+                    "📋 <b>История публикаций</b>\n\n"
+                    "Публикаций пока нет.",
+                    parse_mode="HTML",
+                    reply_markup=get_autopost_menu()
+                )
+                await callback.answer()
+                return
+
+            lines = [
+                "📋 <b>История публикаций</b>",
+                f"Всего: {total}\n",
+            ]
+
+            status_icons = {
+                "published": "✅",
+                "telegram_only": "📱",
+                "instagram_failed": "⚠️",
+                "pending": "⏳",
+            }
+
+            for post in posts[:10]:
+                icon = status_icons.get(post.status, "📝")
+                date = post.created_at.strftime("%d.%m %H:%M") if post.created_at else "-"
+                products = len(post.products_json) if post.products_json else 0
+                lines.append(f"{icon} {date} — {products} товаров")
+
+            await callback.message.edit_text(
+                "\n".join(lines),
+                parse_mode="HTML",
+                reply_markup=get_autopost_menu()
+            )
+
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка: <code>{str(e)[:200]}</code>",
+            parse_mode="HTML",
+            reply_markup=get_autopost_menu()
+        )
+
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "ap:status", IsAdmin())
+async def callback_autopost_status(callback: CallbackQuery):
+    """Show autopost system status"""
+    if not AUTOPOST_AVAILABLE:
+        await callback.answer("Модуль автопостинга недоступен", show_alert=True)
+        return
+
+    await callback.answer("⏳ Проверяю...")
+
+    try:
+        from src.autopost.db.session import get_engine
+        from sqlalchemy import text
+
+        # Check database
+        db_status = "❌"
+        try:
+            async with get_engine().begin() as conn:
+                await conn.execute(text("SELECT 1"))
+            db_status = "✅"
+        except Exception:
+            pass
+
+        # Check config
+        missing = autopost_settings.validate_required()
+        config_status = "✅" if not missing else f"❌ ({', '.join(missing)})"
+
+        lines = [
+            "📊 <b>Статус автопостинга</b>\n",
+            f"Модуль: {'✅ Включён' if autopost_settings.enabled else '⚪ Выключен'}",
+            f"База данных: {db_status}",
+            f"Конфигурация: {config_status}",
+            f"\n<b>Настройки:</b>",
+            f"Канал: {autopost_settings.telegram_channel_id or 'не указан'}",
+            f"Время: {autopost_settings.posting_time}",
+            f"Часовой пояс: {autopost_settings.timezone}",
+            f"Макс. товаров: {autopost_settings.max_products}",
+        ]
+
+        await callback.message.edit_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=get_autopost_menu()
+        )
+
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Ошибка: <code>{str(e)[:200]}</code>",
+            parse_mode="HTML",
+            reply_markup=get_autopost_menu()
+        )
+
+
 # ============== Access Denied for Non-Admins ==============
 
-@admin_router.message(F.text.in_({"📊 Статистика", "🔍 Поиск клиента", "📁 Загрузить Excel", "💱 Курс", "📋 Таблица"}))
+@admin_router.message(F.text.in_({"📊 Статистика", "🔍 Поиск клиента", "📁 Загрузить Excel", "💱 Курс", "📋 Таблица", "📢 Канал"}))
 async def btn_admin_denied(message: Message):
     """Deny access to admin buttons for non-admins"""
     await message.answer("⛔ Эта функция доступна только администраторам.")

@@ -38,8 +38,20 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🔍 Поиск клиента")],
             [KeyboardButton(text="💱 Курс"), KeyboardButton(text="📁 Загрузить Excel")],
+            [KeyboardButton(text="📢 Канал")],
         ],
         resize_keyboard=True,
+    )
+
+
+def get_autopost_menu() -> InlineKeyboardMarkup:
+    """Autopost control menu"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Запустить публикацию", callback_data="ap:run")],
+            [InlineKeyboardButton(text="📋 История постов", callback_data="ap:posts")],
+            [InlineKeyboardButton(text="📊 Статус системы", callback_data="ap:status")],
+        ]
     )
 
 
